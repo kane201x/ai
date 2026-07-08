@@ -12,10 +12,10 @@
 ```mermaid
 graph TD
     subgraph 图结构
-    N1[节点 1<br/>特征: x₁] --- N2[节点 2<br/>特征: x₂]
-    N1 --- N3[节点 3<br/>特征: x₃]
+    N1["节点 1\n特征: x₁"] --- N2["节点 2\n特征: x₂"]
+    N1 --- N3["节点 3\n特征: x₃"]
     N2 --- N3
-    N3 --- N4[节点 4<br/>特征: x₄]
+    N3 --- N4["节点 4\n特征: x₄"]
     end
     subgraph 消息传递
     N1 -->|"聚合邻居"| N2
@@ -44,11 +44,11 @@ graph TD
 ```mermaid
 graph LR
     subgraph 消息传递单步
-    A[节点 i] --> B[聚合邻居消息<br/>m_i = ∑<sub>j∈Ni</sub> φxᵢ, xⱼ, eᵢⱼ]
+    A[节点 i] --> B["聚合邻居消息\nm_i = ∑_j∈Ni φ(xᵢ, xⱼ, eᵢⱼ)"]
     C[邻居 j₁] --> B
     D[邻居 j₂] --> B
     E[邻居 j₃] --> B
-    B --> F[更新节点特征<br/>xᵢ' = γxᵢ, mᵢ]
+    B --> F["更新节点特征\nxᵢ' = γ(xᵢ, mᵢ)"]
     end
     style B fill:#f96,color:#fff
     style F fill:#4a9,color:#fff
@@ -227,12 +227,12 @@ def train(model, x, adj, y, idx_train):
 ```mermaid
 graph TD
     subgraph 大规模 GNN 训练策略
-    A[全图太大<br/>内存不够] --> B[邻居采样]
+    A["全图太大\n内存不够"] --> B[邻居采样]
     A --> C[Cluster-GCN]
     A --> D[分布式训练]
-    B --> E[GraphSAGE<br/>固定采样数]
-    C --> F[图分簇<br/>子图训练]
-    D --> G[多机多卡<br/>分图]
+    B --> E["GraphSAGE\n固定采样数"]
+    C --> F["图分簇\n子图训练"]
+    D --> G["多机多卡\n分图"]
     end
 ```
 

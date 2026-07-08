@@ -7,9 +7,9 @@
 ```mermaid
 graph TD
     subgraph RLHF 三阶段
-    A[基础预训练LM] --> B[SFT 监督微调<br/>指令数据]
-    B --> C[RM 奖励模型训练<br/>偏好标注]
-    C --> D[PPO 强化学习<br/>KL约束]
+    A[基础预训练LM] --> B["SFT 监督微调\n指令数据"]
+    B --> C["RM 奖励模型训练\n偏好标注"]
+    C --> D["PPO 强化学习\nKL约束"]
     D --> E[对齐后模型]
     B -.->|生成多个回复| C
     C -.->|奖励信号| D

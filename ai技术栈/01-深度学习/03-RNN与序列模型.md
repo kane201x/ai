@@ -149,7 +149,7 @@ graph TD
     CAT2 --> NH[候选 h̃ tanh]
     NH --> UMUL1[(×)]
     UG --> UMUL1
-    UG --> UMUL2[(1-zₜ)×hₜ₋₁]
+    UG --> UMUL2["(1-zₜ)×hₜ₋₁"]
     h_old --> UMUL2
     UMUL1 --> ADD[(+)]
     UMUL2 --> ADD
