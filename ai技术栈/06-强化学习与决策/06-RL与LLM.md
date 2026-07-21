@@ -400,3 +400,87 @@ graph LR
 | 安全对齐 | RLHF（PPO） | 偏好+原则 |
 | 多轮对话 | DPO + 迭代 | 2000-10000 |
 | 数学推理 | GRPO + CoT | 10000+可验证题 |
+
+## 7. 实现案例：用 TRL 跑通一个最小 DPO 训练
+
+Hugging Face TRL 把 DPO 封装到一行 `DPOTrainer`。下面给出最小可运行脚本，展示从 SFT 模型到偏好对齐的端到端流程。
+
+```python
+# 需安装: pip install trl transformers datasets accelerate
+from datasets import Dataset
+from trl import DPOTrainer, DPOConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+model_name = "Qwen/Qwen2.5-0.5B-Instruct"  # 小模型便于演示
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(model_name)
+ref_model = AutoModelForCausalLM.from_pretrained(model_name)  # 参考模型冻结
+
+# 构造偏好数据: 每个样本含 prompt / chosen / rejected
+data = {
+    "prompt": ["请解释什么是强化学习？", "写一首关于春天的短诗"],
+    "chosen": ["强化学习是智能体通过与环境交互、最大化累积奖励来学习策略的方法。",
+               "春风轻抚绿柳梢，燕子归来筑新巢。"],
+    "rejected": ["我不知道。", "春天很好。"],
+}
+dataset = Dataset.from_dict(data)
+
+# 用 DPO 的直接偏好优化替代 PPO 的复杂管线
+training_args = DPOConfig(
+    output_dir="./dpo-demo",
+    per_device_train_batch_size=2,
+    num_train_epochs=1,
+    beta=0.1,            # 参考模型偏离惩罚系数
+    learning_rate=1e-5,
+)
+trainer = DPOTrainer(
+    model=model,
+    ref_model=ref_model,
+    args=training_args,
+    processing_class=tokenizer,
+    train_dataset=dataset,
+)
+trainer.train()
+print("DPO 微调完成, 模型偏好已向 chosen 方向对齐")
+```
+
+### 案例：GRPO 可验证奖励（数学题自评分）
+
+GRPO 不需奖励模型，直接用「答案是否正确」的二值/可验证信号。下面给出把数学答案匹配做成 reward 的回调示例。
+
+```python
+import re
+
+def extract_final_answer(text):
+    # 从模型生成的推理文本中抽取最后一行 "答案: xxx"
+    m = re.findall(r"答案[:：]\s*(.+)", text)
+    return m[-1].strip() if m else None
+
+def math_reward_fn(generated_text, gold_answer):
+    # 可验证奖励: 完全匹配给 1.0，否则 0.0（可用数值近似放宽）
+    pred = extract_final_answer(generated_text)
+    if pred is None:
+        return 0.0
+    return 1.0 if pred == gold_answer else 0.0
+
+# 配合第 3 节的 GRPO.update 使用: reward_fn=lambda t: math_reward_fn(t, "42")
+sample = "题目: 6*7 等于多少？\n推理: 6乘7等于42。\n答案: 42"
+print(f"奖励 = {math_reward_fn(sample, '42')}")  # 输出 1.0
+```
+
+### RLHF / DPO / GRPO 数据流对比图
+
+```mermaid
+graph TD
+    A["偏好/可验证数据"] --> B{"方法?"}
+    B -->|"RLHF"| C["训练奖励模型 RM"]
+    C --> D["PPO 优化策略"]
+    D --> E["需 4 个模型并行"]
+    B -->|"DPO"| F["直接偏好优化策略"]
+    F --> G["需策略+参考 2 个模型"]
+    B -->|"GRPO"| H["组内采样+可验证奖励"]
+    H --> I["仅策略模型(无Critic)"]
+    E --> J["对齐模型"]
+    G --> J
+    I --> J
+```

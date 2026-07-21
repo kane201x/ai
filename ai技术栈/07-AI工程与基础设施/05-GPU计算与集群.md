@@ -247,6 +247,98 @@ flowchart TD
     P3 <-->|RDMA| P7
 ```
 
+### 案例：DeepSpeed ZeRO-3 训练 LLaMA-7B（显存优化）
+
+下面演示用 DeepSpeed 的 ZeRO-3 切分优化器状态、梯度和参数，使单卡显存从 ~60GB 降到可单机 8×A100 训练。
+
+```python
+# DeepSpeed ZeRO-3 训练（deepspeed_train.py 片段）
+import torch
+import deepspeed
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-2-7b-hf")
+
+engine, _, _, _ = deepspeed.initialize(
+    model=model,
+    model_parameters=model.parameters(),
+    config={
+        "train_micro_batch_size_per_gpu": 4,
+        "gradient_accumulation_steps": 8,
+        "bf16": {"enabled": True},
+        "zero_optimization": {
+            "stage": 3,                      # ZeRO-3：参数也分片
+            "offload_param": {"device": "none"},
+            "offload_optimizer": {"device": "cpu"},  # 优化器卸载到 CPU
+            "overlap_comm": True,
+        },
+        "tensor_parallel": {"autotp": {"enable": False}},
+    },
+)
+
+for batch in dataloader:
+    engine.train_batch(batch)
+```
+
+```bash
+# 启动 DeepSpeed 训练（4 机 × 8 卡）
+deepspeed --num_gpus 8 --num_nodes 4 \
+    --master_addr node0 --master_port 29500 \
+    deepspeed_train.py
+```
+
+### 实现案例：FSDP 全分片训练（PyTorch 原生）
+
+```python
+# PyTorch FSDP 全分片数据并行
+import torch
+from torch.distributed import init_process_group
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
+
+init_process_group(backend="nccl")
+model = MyTransformer().cuda()
+
+# 自动按层大小切分，参数/梯度/优化器状态全分片
+model = FSDP(
+    model,
+    auto_wrap_policy=size_based_auto_wrap_policy,
+    device_id=torch.cuda.current_device(),
+)
+
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-5)
+for batch in dataloader:
+    optimizer.zero_grad()
+    loss = model(batch).loss
+    loss.backward()
+    optimizer.step()
+```
+
+### 并行策略组合对比
+
+| 组合 | 显存节省 | 通信开销 | 适用规模 | 示例 |
+|------|---------|---------|---------|------|
+| DDP | 1× | 低 | 1-8 卡 / 小模型 | 8×A100 训 7B |
+| ZeRO-2 + TP2 | ~8× | 中 | 16-32 卡 | 13B 训推 |
+| ZeRO-3 + TP4 + PP2 | ~16× | 高 | 64+ 卡 | 70B 全参训练 |
+| FSDP | ~N× | 中-高 | 任意 N 卡 | 多机训练 |
+| PP + TP (Megatron) | 层间+层内 | 高 | 超大模型 | 175B+ |
+
+### Mermaid: ZeRO-3 分片流程
+
+```mermaid
+flowchart TD
+    A["模型参数 W"] --> B["分片到 N 个 rank"]
+    B --> C["前向: 聚合本层参数"]
+    C --> D["计算输出"]
+    D --> E["释放参数副本"]
+    E --> F["反向: 重新聚合参数"]
+    F --> G["计算梯度"]
+    G --> H["梯度分片 AllReduce"]
+    H --> I["各 rank 更新本地分片"]
+    I --> C
+```
+
 ## 3. 分布式通信
 
 ### NCCL 通信操作

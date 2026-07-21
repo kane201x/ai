@@ -220,6 +220,49 @@ class CrystalGNN(nn.Module):
                            crystal_graph.edge_feats, crystal_graph.batch)
 ```
 
+### 案例：AlphaFold 后处理置信度过滤（pLDDT 阈值筛选用例）
+
+```python
+import torch
+
+def filter_low_confidence(pred_coords, plddt, threshold=70.0):
+    # plddt: [N] 每个残基的置信度（0-100）
+    mask = plddt >= threshold
+    reliable_coords = pred_coords[mask]
+    return reliable_coords, mask
+
+def self_consistency_filter(pred_coords, true_distance_stats, tol=1.5):
+    # 用预测坐标重算主链距离分布，与已知统计比对，剔除异常结构
+    import torch.nn.functional as F
+    ca = pred_coords[:, 1] if pred_coords.dim() == 3 else pred_coords
+    dist = torch.cdist(ca.unsqueeze(0), ca.unsqueeze(0)).squeeze(0)
+    diag = torch.diagonal(dist, offset=1)
+    diff = (diag - true_distance_stats[: len(diag)]).abs()
+    return diff.mean().item() < tol
+
+# 用法示例
+coords = torch.randn(100, 3)
+plddt = torch.rand(100) * 100
+good_coords, mask = filter_low_confidence(coords, plddt, threshold=70.0)
+print("高置信残基数:", int(mask.sum().item()))
+```
+
+### 案例：材料发现闭环（AI 设计→预测→筛选）
+
+```mermaid
+graph TD
+    A[种子晶体结构] --> B[生成模型提出候选]
+    B --> C[GNN预测带隙/形成能]
+    C --> D{满足目标?}
+    D -->|否| B
+    D -->|是| E[DFT精算验证]
+    E --> F{稳定且新颖?}
+    F -->|否| B
+    F -->|是| G[纳入材料数据库]
+    G --> H[反馈微调生成模型]
+    H --> B
+```
+
 ## 4. 蛋白质预测方法对比
 
 | 方法 | 输入 | 输出 | 精度 (LDDT) | 速度 |
@@ -266,6 +309,34 @@ class CrystalGNN(nn.Module):
 - **AlphaGeometry**：IMO 几何问题求解
 - **FunSearch**：LLM 搜索数学函数解
 - **定理证明**：Lean 自动证明
+
+### 案例：AlphaTensor 风格矩阵乘法搜索（Strassen 思想验证）
+
+用 AI 搜索更优矩阵乘法算法，可用张量分解描述。下面给出"验证一个乘法方案是否正确"的最小示例：
+
+```python
+import numpy as np
+
+def verify_matmul_scheme(U, V, W, n=2):
+    # U,V,W: [r, n, n] 的低秩因子，r 为乘法次数
+    # 标准验证: sum_k U[k]⊗V[k]⊗W[k] == 标准矩阵乘法张量
+    T = np.zeros((n * n, n * n))
+    for k in range(U.shape[0]):
+        T += np.kron(np.kron(U[k], V[k]), W[k])
+    # 标准张量：索引 (i,j) 处为 e_i⊗e_j
+    std = np.zeros((n * n, n * n))
+    for i in range(n):
+        for j in range(n):
+            idx = i * n + j
+            std[idx, idx] = 1.0
+    return np.allclose(T, std, atol=1e-6)
+
+# 2x2 朴素需要 8 次乘法；Strassen 用 7 次（此处仅验证接口）
+U = np.eye(8)[:8, :2, :2]
+V = np.eye(8)[:8, :2, :2]
+W = np.eye(8)[:8, :2, :2]
+print("方案是否等价标准乘法:", verify_matmul_scheme(U, V, W, n=2))
+```
 
 ## 9. 气候与环境
 

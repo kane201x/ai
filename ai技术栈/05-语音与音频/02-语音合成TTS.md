@@ -371,3 +371,98 @@ print(f"HiFi-GAN waveform: {waveform.shape}")
 - **实时合成**：延迟 <200ms，流式合成
 - **多模态融合**：语音+表情+手势同步
 - **个性化 TTS**：根据用户画像自适应音色和风格
+
+## 9. 实践案例
+
+### 案例：ChatTTS 风格对话合成
+
+ChatTTS 在文本中插入 `[laugh]`、`[uv_break]` 等控制符实现笑声与停顿，下面演示其调用与文本预处理。
+
+```python
+import re
+
+def preprocess_chattts_text(text: str):
+    """插入笑声音符与停顿标记，提升对话自然度"""
+    text = re.sub(r"哈哈+", "[laugh]", text)
+    text = re.sub(r"[，。！？]", lambda m: m.group(0) + "[uv_break]", text)
+    return text
+
+raw = "今天天气真好，我们一起去公园吧，哈哈太开心了！"
+prepared = preprocess_chattts_text(raw)
+print(f"预处理后: {prepared}")
+
+# 假设已加载 chattts 模型
+# wavs = chattts.infer([prepared], use_decoder=True)
+# torchaudio.save("out.wav", wavs[0], 24000)
+```
+
+```mermaid
+flowchart LR
+    A["输入文本"] --> B["多音字消歧"]
+    B --> C["插入韵律/笑声标记"]
+    C --> D["ChatTTS 编码器"]
+    D --> E["自回归解码"]
+    E --> F["HiFi-GAN 声码器"]
+    F --> G["24k 对话波形"]
+```
+
+### 实现案例：用 VITS 做少样本音色克隆
+
+VITS 端到端建模，给定参考说话人的 Mel 即可生成同音色语音，下面演示参考编码器思路。
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class ReferenceEncoder(nn.Module):
+    """从参考音频 Mel 提取全局音色向量（用于音色克隆）"""
+    def __init__(self, n_mels=80, hidden=128, style_dim=256):
+        super().__init__()
+        self.convs = nn.Sequential(
+            nn.Conv2d(1, hidden, 3, padding=1), nn.ReLU(),
+            nn.Conv2d(hidden, hidden, 3, padding=1), nn.ReLU(),
+            nn.MaxPool2d(2)
+        )
+        self.gru = nn.GRU(hidden * (n_mels // 2), style_dim, batch_first=True)
+        self.proj = nn.Linear(style_dim, style_dim)
+
+    def forward(self, mel):
+        x = mel.unsqueeze(1)
+        x = self.convs(x)
+        B, C, Fd, T = x.shape
+        x = x.permute(0, 3, 1, 2).reshape(B, T, C * Fd)
+        _, h = self.gru(x)
+        return F.normalize(self.proj(h.squeeze(0)), dim=-1)
+
+ref_encoder = ReferenceEncoder()
+ref_mel = torch.randn(2, 80, 200)
+style = ref_encoder(ref_mel)
+print(f"音色向量: {style.shape}")
+```
+
+### 案例：FastSpeech 2 时长可控合成
+
+FastSpeech 2 通过 Duration Predictor 实现非自回归并行合成，可手动控制每个音素时长。
+
+```python
+import torch
+
+# 复用第 5 节 FastSpeech 定义
+durations = torch.tensor([[3, 2, 4, 1, 5, 2]])  # 自定义每个 token 的帧数
+tokens = torch.randint(0, 50, (1, 6))
+# model = FastSpeech()
+# mel_out, dur = model(tokens, durations)
+# 将 mel_out 送入声码器即可得到波形
+print("自定义时长张量:", durations, "shape:", tuple(durations.shape))
+```
+
+### TTS 架构选型对比
+
+| 需求 | 推荐模型 | 理由 |
+|------|---------|------|
+| 高质量离线 | VITS / NaturalSpeech 3 | 端到端自然度最高 |
+| 可控并行合成 | FastSpeech 2 | 时长/韵律可调 |
+| 中文对话 | ChatTTS / CosyVoice | 对话韵律与情感 |
+| 少样本克隆 | CosyVoice / OpenVoice | 3 秒即可克隆 |
+| 实时流式 | VITS + 流式声码器 | 延迟可控 |

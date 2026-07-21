@@ -454,3 +454,82 @@ flowchart TB
 | Corrective RAG | 生成后验证 | 高 | 极高 | 高可靠性 |
 | GraphRAG | 图遍历+向量 | 高 | 高 | 关系推理 |
 | Agentic RAG | Agent 决策 | 极高 | 高 | 自主系统 |
+
+## 14. 实现案例
+
+### 案例：Contextual Retrieval（为每个 Chunk 附加文档上下文）
+
+对应正文「Contextual Retrieval（Anthropic 2025）」，先让 LLM 为每个分块生成「文档级上下文前缀」，再一起嵌入，可显著降低歧义：
+
+```python
+def build_contextual_chunk(doc_text: str, chunk: str, llm_call) -> str:
+    # 让 LLM 基于整篇文档，为孤立 chunk 补充背景
+    prompt = f"""<document>
+{doc_text}
+</document>
+这是文档中的一个片段：
+<chunk>
+{chunk}
+</chunk>
+请只用一句话说明该片段在文档中的上下文背景（不要重复片段内容本身）。"""
+    context = llm_call(prompt)
+    # 拼接：上下文前缀 + 原始 chunk，二者共同嵌入
+    return f"{context.strip()}\n\n{chunk}"
+
+doc = "公司 2025 年报：营收 120 亿，同比增长 18%，其中云服务占比 40%。"
+chunk = "同比增长 18%。"
+ctx_chunk = build_contextual_chunk(doc, chunk, lambda p: "该片段描述公司年度营收增速")
+print("增强后 chunk:\n", ctx_chunk)
+```
+
+### 案例：重排序器（Cross-Encoder vs MMR）效果对比表
+
+正文「重排序 Re-ranking」列出多种方法，下表给出选型参考：
+
+| 重排方法 | 计算方式 | 相对延迟 | 精度增益 | 适用场景 |
+|---------|---------|---------|---------|---------|
+| Cross-Encoder (BGE) | Query+Doc 联合编码 | 高 | 最高 | 精排 top-20→top-5 |
+| LLM Listwise | LLM 直接排序 | 极高 | 高 | 少量候选高精度 |
+| ColBERT MaxSim | Token 级延迟交互 | 中 | 高 | 长文档细粒度 |
+| MMR | 多样性重排 | 低 | 中（偏多样性） | 需覆盖多视角 |
+| RRF 融合 | 多路排名倒数加和 | 低 | 中 | 混合检索初排 |
+
+### 案例：GraphRAG 构建与查询流程
+
+对应正文「GraphRAG（2025-2026 核心趋势）」，下图补全「抽取 → 社区 → 检索」三步：
+
+```mermaid
+flowchart TB
+    DOCS["原始文档"] --> EXTRACT["LLM 抽取\n实体 + 关系"]
+    EXTRACT --> GRAPH["知识图谱\n(节点=实体, 边=关系)"]
+    GRAPH --> COMMUNITY["社区检测\n(Leiden 等)"]
+    COMMUNITY --> SUMM["社区摘要生成"]
+    SUMM --> STORE["图谱 + 摘要入库"]
+
+    QUERY["用户问题"] --> ROUTE{"查询类型?"}
+    ROUTE -->|"全局归纳"| GLOBAL["社区摘要聚合"]
+    ROUTE -->|"局部实体"| LOCAL["图遍历检索子图"]
+    GLOBAL --> ANSWER["最终答案"]
+    LOCAL --> ANSWER
+```
+
+### 案例：混合检索（BM25 + 向量）+ RRF 融合实现
+
+对应正文「混合搜索」的 RRF，下面给出可运行的最小实现：
+
+```python
+def rrf_fusion(rank_lists, k=60):
+    # rank_lists: 每个元素是一个 doc_id 列表（已按相关性排序）
+    scores = {}
+    for ranking in rank_lists:
+        for rank, doc_id in enumerate(ranking):
+            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank + 1)
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
+
+# 模拟：BM25 返回 2 个结果，向量检索返回另一个顺序
+bm25_results = ["doc_A", "doc_B", "doc_C"]
+vec_results = ["doc_B", "doc_A", "doc_D"]
+fused = rrf_fusion([bm25_results, vec_results])
+print("RRF 融合后排名:", fused)
+# 由于 doc_A/doc_B 同时出现在两路，排名靠前；doc_D 仅向量命中，靠后
+```

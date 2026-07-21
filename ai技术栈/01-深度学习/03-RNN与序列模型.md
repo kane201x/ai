@@ -258,3 +258,93 @@ out, _ = birnn(x)  # out.shape = (4, 10, 512) 因为双向拼接
 | 时间序列 | LSTM/GRU | 金融/天气预测 |
 | 语音识别 | LSTM + CTC | 序列到序列对齐 |
 | 手写识别 | MD-LSTM | 多维 LSTM |
+
+## 9. 案例：字符级语言模型训练（LSTM 实战）
+
+从零训练一个字符级语言模型：字符映射 → 批次构建 → 训练 → 生成文本。
+
+```mermaid
+graph LR
+    A["语料\n字符串"] --> B["字符词表\nvocab"]
+    B --> C["构造训练样本\n(x[t], y[t+1])"]
+    C --> D["Embedding+LSTM"]
+    D --> E["Linear→词表"]
+    E --> F["CrossEntropy"]
+    F --> G["温度采样生成"]
+    style D fill:#4a9,color:#fff
+    style G fill:#f96,color:#fff
+```
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+text = "深度学习让序列建模更简单deeplearning"
+chars = sorted(set(text))
+stoi = {c: i for i, c in enumerate(chars)}
+itos = {i: c for c, i in stoi.items()}
+vocab = len(chars)
+
+class CharLM(nn.Module):
+    def __init__(self, vocab: int, d_hid: int = 128):
+        super().__init__()
+        self.emb = nn.Embedding(vocab, d_hid)
+        self.lstm = nn.LSTM(d_hid, d_hid, 2, batch_first=True, dropout=0.2)
+        self.head = nn.Linear(d_hid, vocab)
+    def forward(self, x):
+        h = self.emb(x)
+        out, _ = self.lstm(h)
+        return self.head(out)                  # 形状: [b, t, vocab]
+
+def encode(s: str) -> torch.Tensor:
+    return torch.tensor([stoi[c] for c in s], dtype=torch.long)
+
+def train_step(model, opt, seq_len: int = 10):
+    idx = torch.randint(0, len(text) - seq_len, (1,))
+    chunk = text[idx: idx + seq_len + 1]
+    x = encode(chunk[:-1]).unsqueeze(0)        # 形状: [1, t]
+    y = encode(chunk[1:]).unsqueeze(0)
+    logits = model(x)
+    loss = F.cross_entropy(logits.view(-1, vocab), y.view(-1))
+    opt.zero_grad(); loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+    opt.step()
+    return loss.item()
+
+model = CharLM(vocab)
+opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+for step in range(200):
+    train_step(model, opt)
+
+# 温度采样生成
+with torch.no_grad():
+    ctx = encode("深")
+    for _ in range(12):
+        logits = model(ctx.unsqueeze(0))[:, -1] / 0.8
+        nxt = torch.multinomial(F.softmax(logits, -1), 1)
+        ctx = torch.cat([ctx, nxt])
+    print("生成:", "".join(itos[i] for i in ctx))
+```
+
+## 10. 案例：Seq2Seq vs 注意力 Seq2Seq 对比
+
+机器翻译等任务中，是否引入注意力对长句性能影响巨大。
+
+| 结构 | 编码器末态传递 | 长句表现 | 参数量 | 实现难度 |
+|------|--------------|---------|--------|---------|
+| 朴素 Seq2Seq (LSTM Enc-Dec) | 仅最后隐状态 | 差(>30词) | 少 | 低 |
+| 注意力 Seq2Seq | 每步对齐所有隐状态 | 好 | 中 | 中 |
+| Transformer | 全局自注意力 | 极强 | 多 | 高 |
+
+```python
+# 注意力 Seq2Seq 解码一步（Bahdanau 风格）
+def attn_decode_step(dec_hidden, enc_outputs, attn):
+    """dec_hidden: [1, d]; enc_outputs: [src_len, d]; attn: Linear(2d, 1)。"""
+    src_len = enc_outputs.size(0)
+    dec_rep = dec_hidden.unsqueeze(0).expand(src_len, -1)   # [src_len, d]
+    e = attn(torch.cat([dec_rep, enc_outputs], -1)).tanh()  # [src_len, 1]
+    alpha = F.softmax(e, 0)                                  # 注意力权重
+    ctx = (alpha * enc_outputs).sum(0, keepdim=True)         # 上下文向量
+    return ctx, alpha
+```

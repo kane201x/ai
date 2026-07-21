@@ -262,6 +262,109 @@ print(response.guarded_output)
 | Gemini 1.5 Pro | $1.25 | $5.00 | 1M | 超长上下文 |
 | LLaMA 3.1 405B | $0.85 | $0.85 | 128K | 自托管性价比 |
 
+### 案例：基于 LangFuse 的全链路追踪与成本归因
+
+下面演示如何在调用 LLM 时用 LangFuse 装饰器自动记录 Prompt、Token 消耗、延迟与成本，实现按业务线的成本归因。
+
+```python
+# LangFuse 全链路追踪 + 成本归因
+from langfuse.decorators import langfuse_context, observe
+from langfuse.openai import openai  # 自动上报的 OpenAI 封装
+
+@observe(name="customer-service-pipe", as_type="generation")
+def answer_question(context: str, question: str) -> str:
+    prompt = f"上下文：{context}\n问题：{question}\n请给出准确简洁的回答。"
+    response = openai.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        max_tokens=512,
+    )
+    return response.choices[0].message.content
+
+# 1. 调用并记录元数据（业务线、用户）
+langfuse_context.update_current_trace(
+    user_id="user_1001",
+    metadata={"business_line": "ecommerce", "app_version": "2.3.0"},
+)
+
+result = answer_question("退货政策：7 天无理由退货。", "如何申请退货?")
+
+# 2. 强制刷新上报
+langfuse_context.flush()
+```
+
+### 实现案例：语义缓存降低 50% 调用成本
+
+```python
+# 基于向量相似度的语义缓存（GPTCache 风格）
+import hashlib
+import numpy as np
+
+class SemanticCache:
+    def __init__(self, threshold=0.92):
+        self.threshold = threshold
+        self.keys = []          # 历史 query 向量
+        self.values = []        # 历史回答
+
+    def _embed(self, text: str):
+        # 实际可替换为 sentence-transformers；此处用哈希占位演示
+        h = hashlib.md5(text.encode("utf-8")).digest()
+        vec = np.frombuffer(h, dtype=np.uint8).astype(float)
+        norm = np.linalg.norm(vec)
+        return vec / norm
+
+    def get(self, query: str) -> str | None:
+        if not self.keys:
+            return None
+        q = self._embed(query)
+        sims = [float(np.dot(q, k)) for k in self.keys]
+        best = max(sims)
+        if best >= self.threshold:
+            idx = int(np.argmax(sims))
+            return self.values[idx]
+        return None
+
+    def put(self, query: str, answer: str):
+        self.keys.append(self._embed(query))
+        self.values.append(answer)
+
+cache = SemanticCache(threshold=0.92)
+cached = cache.get("如何申请退货")
+if cached is None:
+    ans = answer_question("退货政策：7 天无理由退货。", "如何申请退货?")
+    cache.put("如何申请退货", ans)
+```
+
+### 成本控制策略对比
+
+| 策略 | 实现复杂度 | 典型节省 | 质量风险 | 适用场景 |
+|------|-----------|---------|---------|---------|
+| 语义缓存 | 中 (需向量库) | 30-60% | 低 | 高频相似 Query |
+| 模型路由 | 中 | 40-70% | 低 | 任务难度分层 |
+| Prompt 压缩 | 低 | 50-80% | 极低 | 长系统 Prompt |
+| 批量异步 | 低 | 20-30% | 无 | 离线/非实时 |
+| KV Cache 前缀复用 | 中 | 30-50% | 无 | 固定系统 Prompt |
+| 输出长度裁剪 | 低 | 10-50% | 需权衡 | 可控输出格式 |
+
+### Mermaid: 成本治理闭环
+
+```mermaid
+flowchart TD
+    A["用户请求"] --> B["语义缓存命中?"]
+    B -->|是| C["直接返回缓存"]
+    B -->|否| D["模型路由判断难度"]
+    D -->|简单| E["小模型 gpt-4o-mini"]
+    D -->|复杂| F["大模型 gpt-4o"]
+    E --> G["记录 Token / 成本"]
+    F --> G
+    G --> H["LangFuse 成本看板"]
+    H --> I{"超预算?"}
+    I -->|是| J["限流 / 降级"]
+    I -->|否| A
+    C --> A
+```
+
 ## 3. RAG 观察
 
 ### 质量监控指标

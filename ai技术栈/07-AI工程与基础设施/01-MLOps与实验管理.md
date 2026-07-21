@@ -174,6 +174,109 @@ graph TD
     end
 ```
 
+## 1.5 实践案例
+
+### 案例：端到端实验跟踪 + 自动注册
+
+下面的案例演示如何在一个训练脚本中同时完成超参记录、指标跟踪、最佳模型注册到 MLflow Registry，并在达到阈值时自动打 Staging 标签。
+
+```python
+# 端到端实验跟踪与模型注册
+import mlflow
+import mlflow.pytorch
+import mlflow.tracking
+from mlflow.tracking import MlflowClient
+
+EXPERIMENT_NAME = "text-classification-experiment"
+REGISTER_MODEL_NAME = "bert-classifier-prod"
+
+client = MlflowClient()
+
+def train_and_register(train_df, val_df, lr=3e-5, batch_size=32, epochs=10):
+    # 1. 创建或获取实验
+    mlflow.set_experiment(EXPERIMENT_NAME)
+
+    with mlflow.start_run(run_name="bert-finetune-v3") as run:
+        run_id = run.info.run_id
+        # 2. 记录超参数
+        mlflow.log_params({
+            "learning_rate": lr,
+            "batch_size": batch_size,
+            "num_epochs": epochs,
+            "model_name": "bert-base-chinese",
+        })
+
+        # 3. 训练循环（伪代码）
+        best_val_acc = 0.0
+        for epoch in range(epochs):
+            train_loss = train_one_epoch(train_df, lr, batch_size)
+            val_acc, val_loss = evaluate(val_df)
+            mlflow.log_metrics({
+                "train_loss": train_loss,
+                "val_accuracy": val_acc,
+                "val_loss": val_loss,
+            }, step=epoch)
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                mlflow.pytorch.log_model(model, "model", registered_model_name=REGISTER_MODEL_NAME)
+
+        # 4. 达到阈值自动晋升到 Staging
+        if best_val_acc >= 0.90:
+            latest_version = client.get_latest_versions(REGISTER_MODEL_NAME, stages=["None"])[0].version
+            client.transition_model_version_stage(
+                name=REGISTER_MODEL_NAME,
+                version=latest_version,
+                stage="Staging",
+            )
+            print(f"模型 v{latest_version} 已晋升到 Staging，验证准确率={best_val_acc:.3f}")
+        return run_id
+
+run_id = train_and_register(train_df, val_df)
+```
+
+### 实现案例：用 Evidently 检测数据漂移并触发告警
+
+```python
+# 数据漂移检测 + 阈值告警
+from evidently.report import Report
+from evidently.metric_preset import DataDriftPreset
+import pandas as pd
+
+reference_data = pd.read_csv("data/reference.csv")
+current_data = pd.read_csv("data/current.csv")
+
+report = Report(metrics=[DataDriftPreset()])
+report.run(reference_data=reference_data, current_data=current_data)
+result = report.as_dict()
+
+# 汇总漂移特征数量
+drifted_features = [
+    m["metric"] for m in result["metrics"]
+    if m.get("result", {}).get("drift_detected")
+]
+
+print(f"检测到 {len(drifted_features)} 个特征发生漂移")
+if len(drifted_features) > 0:
+    # 触发告警（实际可接入 Prometheus / 钉钉机器人）
+    print("ALERT: 数据漂移超过阈值，建议重新训练")
+```
+
+### Mermaid: 训练-注册-上线闭环
+
+```mermaid
+flowchart LR
+    A["数据准备"] --> B["训练脚本 with MLflow"]
+    B --> C["记录指标/模型"]
+    C --> D{"验证准确率 >= 0.90?"}
+    D -->|否| E["仅保留 Run 供分析"]
+    D -->|是| F["注册到 Registry"]
+    F --> G["晋升 Staging"]
+    G --> H["线上 A/B 评估"]
+    H --> I{"优于线上基线?"}
+    I -->|否| J["回滚到 Production"]
+    I -->|是| K["晋升 Production"]
+```
+
 ## 2. 流水线编排
 
 | 工具 | 类型 | 调度方式 | 失败处理 | 适用场景 |

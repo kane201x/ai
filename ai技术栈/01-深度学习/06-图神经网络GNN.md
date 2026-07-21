@@ -247,3 +247,64 @@ graph TD
 - **Heterogeneous GNN**：多种节点/边类型
 - **Equivariant GNN**：等变图网络（物理/分子模拟）
 - **Large-scale GNN**：百亿节点图训练
+
+## 7. 案例：用 GCN 做引文图节点分类（Cora 风格）
+
+完整演示在小引文图上训练 2 层 GCN，验证「邻接聚合 + 半监督」的有效性。
+
+```mermaid
+graph LR
+    A["图: 节点=论文\n边=引用"] --> B["归一化邻接 Â"]
+    B --> C["GCN Layer1\n1433→16"]
+    C --> D["ReLU+Dropout"]
+    D --> E["GCN Layer2\n16→7"]
+    E --> F["LogSoftmax"]
+    F --> G["仅用标注节点算损失"]
+    style C fill:#4a9,color:#fff
+    style E fill:#f96,color:#fff
+```
+
+```python
+import torch
+
+# 构造一个 4 节点小图（演示数据流）
+A = torch.tensor([[0,1,1,0],[1,0,1,1],[1,1,0,1],[0,1,1,0]], dtype=torch.float)
+X = torch.randn(4, 8)                       # 4 个节点, 8 维特征
+y = torch.tensor([0, 1, 2, 1])              # 节点标签
+idx_train = torch.tensor([0, 1])            # 仅 2 个标注节点
+
+model = GCN(d_in=8, d_hid=16, d_out=3)
+opt = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
+
+for epoch in range(50):
+    logits = model(X, A_norm := normalize_adj(A))   # A_norm: [4,4]
+    loss = F.nll_loss(logits[idx_train], y[idx_train])
+    opt.zero_grad(); loss.backward(); opt.step()
+
+print("训练节点准确率:",
+      (model(X, normalize_adj(A)).argmax(1)[idx_train] == y[idx_train]).float().mean().item())
+```
+
+## 8. 案例：链接预测任务（边是否存在）
+
+对比不同 GNN 在「链接预测」上的打分方式，适用于推荐/知识图谱补全。
+
+| 方法 | 边打分公式 | 是否需要负采样 | 代表 |
+|------|-----------|--------------|------|
+| 内积 | s = h_iᵀ h_j | ✓ | GAE |
+| 双线性 | s = h_iᵀ W h_j | ✓ | DistMult |
+| 距离 | s = -∥h_i + r - h_j∥ | ✓ | TransE |
+
+```python
+def link_score(h_i: torch.Tensor, h_j: torch.Tensor, method: str = "dot") -> float:
+    """h_i, h_j: [d] 节点表示。返回边存在分数。"""
+    if method == "dot":
+        return torch.dot(h_i, h_j).item()
+    elif method == "dist":
+        return -torch.norm(h_i - h_j, p=2).item()
+    raise ValueError(method)
+
+h = torch.randn(4, 16)                       # 4 个节点的表示
+print("节点0-1 内积分数:", round(link_score(h[0], h[1], "dot"), 3))
+print("节点0-1 距离分数:", round(link_score(h[0], h[1], "dist"), 3))
+```

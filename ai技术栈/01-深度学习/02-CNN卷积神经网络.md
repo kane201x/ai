@@ -355,3 +355,85 @@ def mixup(x, y, alpha=1.0):
 | 语义分割 | DeepLabV3+ / UNet | 轻量级 | 0.01 (SGD) | 16-32 |
 | 特征提取 | ResNet / DINOv2 | 迁移学习 | 1e-4 | 64-256 |
 | 移动端 | MobileNet V4 | 量化部署 | 1e-3 (Adam) | 32-128 |
+
+## 7. 案例：用 CNN 做 CIFAR-10 图像分类（ResNet-18 风格）
+
+完整可运行示例：数据增强 + 小 ResNet + 训练循环，演示 CNN 端到端落地。
+
+```mermaid
+graph LR
+    A["CIFAR-10\n3×32×32"] --> B["数据增强\n翻转+裁剪"]
+    B --> C["ResNet-18\n4 阶段残差"]
+    C --> D["Global AvgPool\n512 维"]
+    D --> E["FC 10\n分类"]
+    E --> F["CrossEntropy"]
+    F --> G["SGD 训练"]
+    style C fill:#4a9,color:#fff
+    style E fill:#f96,color:#fff
+```
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+def make_resnet18_cifar(num_classes: int = 10) -> nn.Module:
+    """极简 ResNet-18 骨架（适配 32×32 输入）。"""
+    def block(cin, cout, stride=1):
+        return nn.Sequential(
+            nn.Conv2d(cin, cout, 3, stride, 1, bias=False),
+            nn.BatchNorm2d(cout), nn.ReLU(inplace=True),
+            nn.Conv2d(cout, cout, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(cout),
+        )
+    class ResAdd(nn.Module):
+        def __init__(self, cin, cout, stride=1):
+            super().__init__()
+            self.blk = block(cin, cout, stride)
+            self.short = nn.Sequential()
+            if stride != 1 or cin != cout:
+                self.short = nn.Sequential(
+                    nn.Conv2d(cin, cout, 1, stride, bias=False),
+                    nn.BatchNorm2d(cout))
+        def forward(self, x):
+            return F.relu(self.blk(x) + self.short(x))
+    return nn.Sequential(
+        nn.Conv2d(3, 64, 3, 1, 1, bias=False), nn.BatchNorm2d(64), nn.ReLU(),
+        ResAdd(64, 64), ResAdd(64, 64),
+        ResAdd(64, 128, stride=2), ResAdd(128, 128),
+        ResAdd(128, 256, stride=2), ResAdd(256, 256),
+        nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(256, num_classes))
+
+model = make_resnet18_cifar()
+x = torch.randn(8, 3, 32, 32)          # 形状: [8, 3, 32, 32]
+out = model(x)                          # 形状: [8, 10]
+print("ResNet-18 CIFAR 输出形状:", tuple(out.shape))
+
+# 训练一步（伪数据）
+opt = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4)
+y = torch.randint(0, 10, (8,))
+loss = F.cross_entropy(out, y)
+opt.zero_grad(); loss.backward(); opt.step()
+```
+
+## 8. 案例：转置卷积 / 上采样 对比（语义分割 / 生成）
+
+解码器常用三种上采样方式，代价与质量不同。
+
+| 方式 | 参数量 | 可学习 | 棋盘伪影 | 适用 |
+|------|--------|--------|---------|------|
+| 转置卷积 `ConvTranspose2d` | 有 | ✓ | 易产生 | 需要学习上采样 |
+| 最近邻+卷积 | 无(上采样) | ✓(仅卷积) | 较少 | 分割/U-Net |
+| 双线性插值+卷积 | 无(插值) | ✓(仅卷积) | 少 | 稳定上采样 |
+
+```python
+# 转置卷积上采样 2×
+tc = nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2)
+# 最近邻上采样 + 普通卷积
+up = nn.Sequential(nn.Upsample(scale_factor=2, mode="nearest"), nn.Conv2d(64, 32, 3, padding=1))
+
+x = torch.randn(1, 64, 16, 16)
+y_tc = tc(x)       # 形状: [1, 32, 32, 32]
+y_up = up(x)       # 形状: [1, 32, 32, 32]
+print("上采样输出形状:", tuple(y_tc.shape), tuple(y_up.shape))
+```

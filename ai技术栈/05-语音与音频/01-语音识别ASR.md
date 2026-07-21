@@ -258,3 +258,124 @@ for epoch in range(3):
 - **Seamless Communication**：Meta 实时语音翻译
 - **端到端语音大模型**：语音理解+生成统一模型
 - **低资源语言 ASR**：Few-shot 扩展新语言
+
+## 10. 实践案例
+
+### 案例：用 WeNet 搭建流式中文识别
+
+下面演示 WeNet 的 CTC/Attention 联合训练与解码思路，核心是 `ctc_weight` 平衡两种损失。
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class JointCTCDecoder(nn.Module):
+    def __init__(self, vocab_size, d_model=256, ctc_weight=0.3):
+        super().__init__()
+        self.ctc_weight = ctc_weight
+        self.shared_encoder = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(d_model, 4, dim_feedforward=1024),
+            num_layers=6
+        )
+        self.ctc_head = nn.Linear(d_model, vocab_size)
+        self.attn_decoder = nn.TransformerDecoder(
+            nn.TransformerDecoderLayer(d_model, 4, dim_feedforward=1024),
+            num_layers=3
+        )
+        self.attn_head = nn.Linear(d_model, vocab_size)
+
+    def forward(self, src, tgt):
+        enc = self.shared_encoder(src)
+        ctc_logits = self.ctc_head(enc)
+        dec = self.attn_decoder(tgt, enc)
+        attn_logits = self.attn_head(dec)
+        return ctc_logits, attn_logits
+
+    def loss(self, ctc_logits, attn_logits, ctc_targets, attn_targets, src_len):
+        ctc_loss = F.ctc_loss(
+            ctc_logits.log_softmax(-1).transpose(0, 1),
+            ctc_targets, src_len, torch.full((ctc_targets.shape[0],), 50),
+            zero_infinity=True
+        )
+        attn_loss = F.cross_entropy(
+            attn_logits.reshape(-1, attn_logits.shape[-1]), attn_targets.reshape(-1)
+        )
+        return self.ctc_weight * ctc_loss + (1 - self.ctc_weight) * attn_loss
+
+src = torch.randn(8, 200, 256)
+tgt = torch.randn(8, 40, 256)
+model = JointCTCDecoder(vocab_size=4232)
+ctc_logits, attn_logits = model(src, tgt)
+print(f"CTC: {ctc_logits.shape}, Attention: {attn_logits.shape}")
+```
+
+```mermaid
+flowchart LR
+    A["16k 单声道音频"] --> B["FBank 特征提取"]
+    B --> C["Conformer 编码器"]
+    C --> D["CTC 分支"]
+    C --> E["Attention 解码器"]
+    D --> F["CTC 损失"]
+    E --> G["Attention 损失"]
+    F --> H["联合训练"]
+    G --> H
+    D --> I["流式解码结果"]
+    E --> I
+```
+
+### 实现案例：RTL 实时因子评测
+
+流式部署必须关注 RTF，下面的函数模拟一次推理并计算处理耗时与语音时长的比值。
+
+```python
+import time
+import torch
+
+def measure_rtf(model, waveform: torch.Tensor, sr: int = 16000):
+    """计算实时因子 RTF = 推理耗时 / 音频时长"""
+    audio_duration = waveform.shape[-1] / sr
+    start = time.time()
+    with torch.no_grad():
+        _ = model(waveform)
+    elapsed = time.time() - start
+    return elapsed / audio_duration
+
+class DummyASR(torch.nn.Module):
+    def forward(self, x):
+        return x.mean(dim=-1)
+
+model = DummyASR()
+wav = torch.randn(1, 16000 * 5)  # 5 秒音频
+rtf = measure_rtf(model, wav)
+print(f"RTF = {rtf:.4f} (RTF < 1 表示可实时)")
+```
+
+### 案例：SenseVoice 多任务输出解析
+
+SenseVoice 一次性输出文本、语言、情感和事件标签，便于语音理解应用。
+
+```python
+import re
+
+def parse_sensevoice_output(raw: str):
+    """解析 SenseVoice 风格的多任务标签输出"""
+    pattern = r"<\|(\w+)\|>"
+    labels = dict(re.findall(pattern, raw))
+    text = re.sub(pattern, "", raw).strip()
+    return text, labels
+
+raw_output = "<|zh|><|NEUTRAL|><|Speech|>今天我们一起去爬山吧"
+text, labels = parse_sensevoice_output(raw_output)
+print(f"文本: {text}")
+print(f"标签: 语言={labels.get('zh')}, 情感={labels.get('NEUTRAL')}, 事件={labels.get('Speech')}")
+```
+
+### ASR 解码策略选择对比
+
+| 场景 | 推荐策略 | 原因 |
+|------|---------|------|
+| 离线高精度 | Beam Search + LM Rescoring | 质量优先 |
+| 流式低延迟 | Greedy / Prefix Beam | 无需整句缓存 |
+| 带词典约束 | Flashlight Beam | 强制词表合法 |
+| 边缘设备 | Greedy | 计算量最小 |

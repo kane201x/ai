@@ -365,6 +365,57 @@ class InferenceScalingAnalysis:
         return frontier
 ```
 
+### 案例：AGI Agent 工具调用闭环（ReAct 风格）
+
+通往 AGI 的关键能力是"感知-推理-行动"闭环。下面给出一个极简 ReAct 循环（思考→行动→观察→再思考）：
+
+```python
+import re
+
+class TinyReActAgent:
+    def __init__(self, llm_fn):
+        self.llm = llm_fn  # 输入 prompt 返回文本
+        self.tools = {
+            "search": lambda q: f"搜索结果: {q} 的前 3 条摘要",
+            "calc": lambda e: str(eval(e)),
+        }
+
+    def run(self, goal, max_steps=5):
+        traj = []
+        prompt = f"目标: {goal}\n请按 Thought/Action/Observation 迭代。"
+        for step in range(max_steps):
+            out = self.llm(prompt)
+            thought = re.search(r"Thought:(.+)", out, re.S)
+            action = re.search(r"Action:(.+?)\[(.+?)\]", out)
+            traj.append(("thought", thought.group(1).strip() if thought else out))
+            if action:
+                name, arg = action.group(1).strip(), action.group(2).strip()
+                obs = self.tools.get(name, lambda x: "未知工具")(arg)
+                traj.append(("obs", obs))
+                prompt += f"\nObservation: {obs}\n"
+            else:
+                break
+        return traj
+
+# 用法示例（用假 LLM 演示流程）
+agent = TinyReActAgent(lambda p: "Thought: 需要计算\nAction: calc[1+2*3]")
+print(agent.run("今天天气如何联网查询并算 1+2*3"))
+```
+
+### 案例：AGI 能力雷达（当前 vs 人类）
+
+```mermaid
+graph TD
+    subgraph 能力对比
+        A[AGI 能力] --> B[语言: AI接近]
+        A --> C[数学: AI接近]
+        A --> D[常识: 人类领先]
+        A --> E[规划: 人类领先]
+        A --> F[因果: 人类领先]
+        A --> G[发现: 人类领先]
+    end
+```
+
 ## 4. AGI 认知能力对比
 
 | 能力 | 当前 AI (2025) | 人类水平 | 差距 | 突破预测 |

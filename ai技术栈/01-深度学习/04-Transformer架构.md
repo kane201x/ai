@@ -298,3 +298,85 @@ class CausalTransformer(nn.Module):
 - **长上下文优化**：百万级 token 成为现实
 - **Speculative Decoding**：2-3× 推理加速
 - **KV Cache 量化**：INT4/FP8 缓存压缩
+
+## 7. 案例：从零训练一个微型 GPT（因果 LM 实战）
+
+演示 mini-GPT 的构建、因果掩码与自回归训练一步，可直接扩展到真实语料。
+
+```mermaid
+graph LR
+    A["token序列"] --> B["Embedding+位置"]
+    B --> C["N× Pre-LN Block\n(MHA+SwiGLU)"]
+    C --> D["LayerNorm"]
+    D --> E["LM Head\n→词表"]
+    E --> F["Shifted CrossEntropy"]
+    F --> G["自回归训练"]
+    style C fill:#4a9,color:#fff
+    style E fill:#f96,color:#fff
+```
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class MiniGPT(nn.Module):
+    def __init__(self, vocab: int = 100, d: int = 128, n_layers: int = 4, heads: int = 4):
+        super().__init__()
+        self.emb = nn.Embedding(vocab, d)
+        self.pos = nn.Parameter(torch.zeros(1024, d))
+        self.blocks = nn.ModuleList([
+            TransformerEncoderBlock(d, heads, d * 4) for _ in range(n_layers)])
+        self.ln = nn.LayerNorm(d)
+        self.head = nn.Linear(d, vocab)
+
+    def forward(self, x):
+        t = x.size(1)
+        x = self.emb(x) + self.pos[:t]
+        mask = torch.triu(torch.ones(t, t), diagonal=1).bool()
+        for blk in self.blocks:
+            x = blk(x, mask=~mask)
+        return self.head(self.ln(x))               # 形状: [b, t, vocab]
+
+vocab, b, t = 100, 4, 20
+model = MiniGPT(vocab)
+opt = torch.optim.AdamW(model.parameters(), lr=3e-4)
+x = torch.randint(0, vocab, (b, t))
+logits = model(x)
+loss = F.cross_entropy(logits[:, :-1].reshape(-1, vocab), x[:, 1:].reshape(-1))
+opt.zero_grad(); loss.backward(); opt.step()
+print("GPT 训练 loss:", round(loss.item(), 3))
+```
+
+## 8. 案例：位置编码方案对比与 RoPE 实现
+
+不同位置编码在「外推性 / 相对位置感知」上差异显著，现代 LLM 主流用 RoPE。
+
+| 编码 | 相对位置 | 长度外推 | 实现成本 | 采用模型 |
+|------|---------|---------|---------|---------|
+| Sinusoidal | ✓(三角性质) | 中 | 低 | 原始 Transformer |
+| 可学习 PE | ✗ | 差(固定长度) | 低 | BERT |
+| RoPE | ✓(旋转) | 好 | 中 | LLaMA/Qwen |
+| ALiBi | ✓(线性偏置) | 好 | 低 | BLOOM |
+
+```python
+def apply_rope(q: torch.Tensor, k: torch.Tensor, base: int = 10000):
+    """q,k: [b, h, n, d]，d 为偶数。返回旋转后 q,k。"""
+    b, h, n, d = q.shape
+    half = d // 2
+    inv_freq = 1.0 / (base ** (torch.arange(0, d, 2).float() / d))
+    pos = torch.arange(n).float()
+    freqs = torch.outer(pos, inv_freq)            # [n, half]
+    cos = freqs.cos().repeat_interleave(2, -1)    # [n, d]
+    sin = freqs.sin().repeat_interleave(2, -1)
+    def rot(x):
+        x1, x2 = x[..., :half], x[..., half:]
+        rot_part = torch.cat([-x2, x1], -1)
+        return x * cos + rot_part * sin
+    return rot(q), rot(k)                          # 形状不变
+
+q = torch.randn(2, 4, 16, 64)
+k = torch.randn(2, 4, 16, 64)
+q_r, k_r = apply_rope(q, k)
+print("RoPE 后形状:", tuple(q_r.shape))            # (2, 4, 16, 64)
+```

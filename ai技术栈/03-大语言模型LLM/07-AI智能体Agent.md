@@ -529,3 +529,95 @@ flowchart TB
 | L2 | 安全操作自动 | 敏感操作确认 | 部分 | 开发助手 |
 | L3 | 大部分自动 | 异常回滚 | 广泛 | 生产系统 |
 | L4 | 完全自动 | 审计追溯 | 全部 | 成熟系统 |
+
+## 14. 实现案例
+
+### 案例：代码 Agent 的单次工具循环（ReAct 风格）
+
+对应正文「Claude Agent SDK」内置工具与「ReAct 循环」，下面演示一个最小化代码 Agent：读文件 → 改文件 → 跑测试：
+
+```python
+class CodeAgent:
+    def __init__(self, model, tokenizer, workspace):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.ws = workspace
+        self.tools = {
+            "read_file": self._read,
+            "edit_file": self._edit,
+            "run_tests": self._test,
+        }
+
+    def _read(self, path):
+        return open(f"{self.ws}/{path}").read()[:500]
+    def _edit(self, path, content):
+        with open(f"{self.ws}/{path}", "w") as f:
+            f.write(content)
+        return "已写入"
+    def _test(self, cmd="pytest -q"):
+        import subprocess
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=self.ws)
+        return r.stdout[-300:] + r.stderr[-300:]
+
+    def run(self, task, max_steps=8):
+        history = [f"任务: {task}"]
+        for _ in range(max_steps):
+            prompt = "\n".join(history) + "\n下一步(思考/调用 read_file|edit_file|run_tests):"
+            action = self.model.generate(prompt)  # 占位
+            history.append(action)
+            if "run_tests" in action and "全部通过" in action:
+                return "任务完成"
+        return "达到步数上限"
+
+# 说明：实际 Agent 通过工具 JSON Schema 约束输出格式（见 11.2），
+# 并在每次 tool_use 后用 tool_result 回填 Observation，迭代直至任务结束。
+```
+
+### 案例：Code Agent 自主修复循环示意图
+
+下文用 mermaid 描述「生成代码 → 运行测试 → 失败则反思再改」的闭环：
+
+```mermaid
+flowchart TB
+    START["收到 Issue / 任务"] --> PLAN["规划改动文件"]
+    PLAN --> READ["read_file 读取相关代码"]
+    READ --> EDIT["edit_file 写入补丁"]
+    EDIT --> TEST["run_tests 执行测试"]
+    TEST --> CHECK{"全部通过?"}
+    CHECK -->|"是"| DONE["提交并回复"]
+    CHECK -->|"否"| REFLECT["分析失败日志\n定位问题"]
+    REFLECT --> EDIT
+```
+
+### 案例：MCP Server 工具定义 vs Function Calling 定义对比
+
+正文对比了 MCP 与 Function Calling，这里给出同一工具「查天气」两种定义的写法差异：
+
+| 维度 | Anthropic tool_use | OpenAI tools | MCP Server 注册 |
+|------|-------------------|-------------|----------------|
+| 描述字段 | "description" | "description" | "description" |
+| 参数 schema | input_schema | parameters | inputSchema |
+| 调用返回 | tool_result block | tool response | JSON-RPC tools/call |
+| 多工具发现 | 列表传入 | 列表传入 | tools/list 动态发现 |
+| 跨进程 | 同一上下文 | 同一上下文 | 独立进程 (Stdio/SSE) |
+
+```python
+# OpenAI 风格
+openai_tool = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "查询天气",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+    },
+}
+
+# MCP 风格（注册到 Server，供任意 Client 通过 tools/list 发现）
+mcp_tool = {
+    "name": "get_weather",
+    "description": "查询天气",
+    "inputSchema": {"type": "object", "properties": {"city": {"type": "string"}}},
+}
+
+print("二者参数结构一致，区别在传输与发现机制")
+```
