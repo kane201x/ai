@@ -30,7 +30,10 @@ ai技术栈/
 │   ├── 06-检索增强生成RAG.md # GraphRAG/Agentic RAG/多模态/Contextual
 │   ├── 07-AI智能体Agent.md   # MCP 2026规范/A2A/ADK/Function Calling
 │   ├── 08-评估与基准.md      # MMLU-Pro/GPQA/SWE-bench Pro/Arena
-│   └── 09-推理框架与部署.md  # vLLM/SGLang/TensorRT-LLM/Ollama
+│   ├── 09-推理框架与部署.md  # vLLM/SGLang/TensorRT-LLM/Ollama
+│   ├── 10-智能体框架与架构.md # LangGraph/ADK/MSAF/18种架构模式/选型决策树
+│   ├── 11-智能体记忆系统.md  # 九类记忆实现/Mem0/Letta/Zep/场景记忆模式
+│   └── 12-Jev与SystemOne判别模型.md # System1判别/三原语/置信度门控/ReflexGate
 │
 ├── 04-计算机视觉CV/          # CV 完整知识
 │   ├── README.md             # 总览与框架对比
@@ -58,10 +61,18 @@ ai技术栈/
 ├── 09-行业应用/              # 行业落地
 │   ├── README.md             # 应用模式矩阵
 │   ├── 03-AI编程.md          # 代码模型/AI IDE/Agent编程
+│   └── 07-金融智能体专题.md   # 投研/信贷/反欺诈/量化/RegTech 的 Agent 化
 │
 ├── 10-前沿方向/              # 技术前沿
 │   ├── README.md             # 2026趋势栈
 │   └── 07-2026前沿趋势.md    # 年度全景/展望2027
+│
+├── 11-智能搜索/              # 智能搜索引擎
+│   ├── README.md             # 模块总览/统一架构/评估指标
+│   ├── 01-文本搜索.md        # BM25/语义/混合检索/RRF/重排序
+│   ├── 02-文档搜索.md        # PDF/OCR/版面分析/分块/表格
+│   ├── 03-语音搜索.md        # ASR/语音指纹/说话人嵌入/热词
+│   └── 04-视频搜索.md        # 镜头检测/CLIP/多模态融合
 │
 └── README.md                 # 当前文件
 ```
@@ -71,10 +82,10 @@ ai技术栈/
 | 角色 | 建议路径 |
 |------|---------|
 | 🟢 入门 | 00-基础 → 01-深度学习 → 03-LLM 基础概念 |
-| 🔵 进阶 | 03-LLM 全模块 → 04-CV → 05-语音 → 06-RL |
+| 🔵 进阶 | 03-LLM 全模块（含智能体系列 07/10/11/12）→ 04-CV → 05-语音 → 06-RL |
 | 🔴 大师 | 07-工程 → 08-安全 → 10-前沿 → 论文精读 |
 
-## 覆盖模型（截至 2026.7）
+## 覆盖模型（截至 2026.9）
 
 | 厂商 | 模型 |
 |------|------|
@@ -83,13 +94,14 @@ ai技术栈/
 | Alibaba | Qwen 2.5/3/3.5/3.7 Max |
 | Google | Gemini 2.5/3/3.1 Pro |
 | Anthropic | Claude 3.5/4/Opus 4.5-4.8/Fable 5 |
+| TypeSafe AI | Jev 1.13（System One 判别模型） |
 | 其他 | Mistral Large 3/Kimi K2/GLM-5/Nemotron 3/Phi-4 |
 
 ## 知识统计
 
-- **总文档数**：25+
+- **总文档数**：101（含 12 份分类 README）
 - **覆盖知识点**：1000+
-- **最新更新**：2026年7月
+- **最新更新**：2026年9月（新增金融智能体专题、Jev/System One 判别模型、智能体框架与架构、智能体记忆系统）
 - **许可证**：知识共享
 
 ---

@@ -10,20 +10,23 @@
 
 ```mermaid
 graph TD
-    subgraph 输入图像 H×W×C
-    IMG[32×32×3]
+    subgraph 输入图像 H_W_C
+        IMG["32*32*3"]
     end
-    subgraph 卷积核 K×K×C×F
-    K1[3×3×3 conv → 64个特征图]
+    subgraph 卷积核 K_K_C_F
+        K1["3*3*3 conv → 64个特征图"]
     end
     subgraph 输出特征图
-    FM[32×32×64]
+        FM["32*32*64"]
     end
-    IMG -->|滑动卷积| K1 -->|ReLU| FM
-    FM -->|MaxPool 2×2| POOL[16×16×64]
-    POOL -->|Conv 3×3×64→128| FM2[16×16×128]
-    FM2 -->|Global Avg Pool| GAP[128维向量]
-    GAP -->|FC| OUT[分类输出]
+
+    IMG -->|滑动卷积| K1
+    K1 -->|ReLU激活| FM
+    FM -->|MaxPool 2*2| POOL["16*16*64"]
+    POOL -->|Conv 3*3*64→128| FM2["16*16*128"]
+    FM2 -->|Global Avg Pool| GAP["128维向量"]
+    GAP -->|FC全连接| OUT["分类输出"]
+
 ```
 
 手动实现 2D 卷积：
